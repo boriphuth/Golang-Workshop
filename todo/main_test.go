@@ -22,6 +22,10 @@ func TestListTodo(t *testing.T) {
 
 	listTodo := ListTodo()
 
+	for i := range listTodo {
+		listTodo[i].ID = ""
+	}
+
 	expected := []todo{
 		{Topic: "Learn golang"},
 		{Topic: "Learn git"},
@@ -32,4 +36,20 @@ func TestListTodo(t *testing.T) {
 		t.Errorf("%v\nis expected but get\n%v\n", expected, listTodo)
 	}
 
+}
+
+func TestUpdateTodo(t *testing.T) {
+
+	todoList = []todo{}
+	NewTodo("Learn golang")
+	var todo = todo{
+		ID : todoList[0].ID,
+		Topic : "Learn golang updated",
+		Done  : true,
+	}
+	UpdateTodo(todo)
+
+	if todoList[0].Topic != "Learn golang updated" {
+		t.Error("it shoud store Learn golang but get", todoList[0].Topic)
+	}
 }
