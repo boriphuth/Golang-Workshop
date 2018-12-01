@@ -1,74 +1,135 @@
 package main
 
 import (
+	"crypto/tls"
+	"log"
+	"net"
 	"net/http"
 
-	"github.com/google/uuid"
+	"github.com/globalsign/mgo"
+	"github.com/globalsign/mgo/bson"
 	"github.com/labstack/echo"
 )
 
-var todoList = []todo{}
+const database = "tech_inno"
+const collection = "test"
 
-func main1() {
+func main() {
+	var err error
+
+	// viper.AutomaticEnv()
+	// viper.SetEnvKeyReplacer(strings.NewReplacer("-", "."))
+	// viper.SetDefault("url", "mongodb://localhost:2277")
+	// port := viper.GetString("port")
+	// url := viper.GetString("url")
+
+	// tlsConfig := &tls.Config{InsecureSkipVerify: true}
+
+	// dialInfo, err := mgo.ParseURL(url)
+	// dialInfo.DialServer = func(addr *mgo.ServerAddr) (net.Conn, error) {
+	// 	return tls.Dial("tcp", addr.String(), tlsConfig)
+	// }
+
+	// session, err := mgo.DialWithInfo(dialInfo)
+
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// defer session.Close()
+	url := "mongodb://dbuser1234:Password1234@cluster0-shard-00-00-jersx.mongodb.net:27017,cluster0-shard-00-01-jersx.mongodb.net:27017,cluster0-shard-00-02-jersx.mongodb.net:27017/test?ssl=true&replicaSet=Cluster0-shard-0&authSource=admin"
+
+	tlsConfig := &tls.Config{InsecureSkipVerify: true}
+	dialInfo, err := mgo.ParseURL(url)
+	dialInfo.DialServer = func(addr *mgo.ServerAddr) (net.Conn, error) {
+		return tls.Dial("tcp", addr.String(), tlsConfig)
+	}
+	session, err := mgo.DialWithInfo(dialInfo)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer session.Close()
+
 	e := echo.New()
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Hello, World!")
 	})
-
-	e.POST("/todo", func(c echo.Context) error {
-
-		t := &todo{}
-		if err := c.Bind(t); err != nil {
+	h := todoHandler{session: session}
+	e.POST("/todos", h.NewTodoHandler)
+	e.GET("/todos", ListTodoHandler, MiddlewareSession(session))
+	e.PUT("/todos/:id", func(c echo.Context) error {
+		err := DoneTodo(session, c.Param("id"))
+		if err != nil {
 			return err
 		}
-		NewTodo(t.Topic)
 		return c.JSON(http.StatusOK, nil)
 	})
-
-	e.GET("/todos", func(c echo.Context) error {
-		list := ListTodo()
-		return c.JSON(http.StatusOK, list)
-	})
-
-	e.PUT("/todo", func(c echo.Context) error {
-
-		t := todo{}
-		if err := c.Bind(&t); err != nil {
-			return err
-		}
-		UpdateTodo(t)
-		return c.JSON(http.StatusOK, t)
-	})
-
-	// Routes
-	// e.POST("/users", createUser)
-	// e.GET("/users/:id", getUser)
-	// e.PUT("/users/:id", updateUser)
-	// e.DELETE("/users/:id", deleteUser)
-
-	e.Logger.Fatal(e.Start(":1323"))
+	e.Logger.Fatal(e.Start(":" + "1323"))
 }
 
 type todo struct {
-	ID    string `json:"id"`
-	Topic string `json:"topic"`
-	Done  bool   `json:"done"`
+	ID    bson.ObjectId `json:"id" bson:"_id"`
+	Topic string        `json:"topic"`
+	Done  bool          `json:"done"`
 }
 
-func NewTodo(s string) {
-	todoList = append(todoList, todo{ID: uuid.New().String(), Topic: s})
+type todoHandler struct {
+	session *mgo.Session
 }
 
-func ListTodo() []todo {
-	return todoList
+func (h *todoHandler) NewTodoHandler(c echo.Context) error {
+	var t todo
+	err := c.Bind(&t)
+	if err != nil {
+		return err
+	}
+	NewTodo(h.session, t.Topic)
+	return c.JSON(http.StatusOK, nil)
 }
 
-func UpdateTodo(t todo) []todo {
-	for i := range todoList {
-		if todoList[i].ID == t.ID {
-			// Found!
-			todoList[i] = t
+func NewTodo(session *mgo.Session, topic string) {
+	s := session.Copy()
+	defer s.Close()
+	c := s.DB(database).C(collection)
+	c.Insert(todo{ID: bson.NewObjectId(), Topic: topic})
+}
+
+func ListTodoHandler(c echo.Context) error {
+	session := c.Get("mgoSession").(*mgo.Session)
+	list := ListTodo(session)
+	return c.JSON(http.StatusOK, list)
+}
+
+func ListTodo(session *mgo.Session) []todo {
+	var all []todo
+	s := session.Copy()
+	defer s.Close()
+	c := s.DB(database).C(collection)
+	err := c.Find(nil).All(&all)
+	if err != nil {
+		return nil
+	}
+	return all
+}
+
+func DoneTodo(session *mgo.Session, id string) error {
+	var otodo todo
+	s := session.Copy()
+	defer s.Close()
+	c := s.DB(database).C(collection)
+	err := c.FindId(bson.ObjectIdHex(id)).One(&otodo)
+	if err != nil {
+		return err
+	}
+
+	otodo.Done = true
+	return c.UpdateId(bson.ObjectIdHex(id), &otodo)
+}
+
+func MiddlewareSession(session *mgo.Session) echo.MiddlewareFunc {
+	return func(handler echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Set("mgoSession", session)
+			return handler(c)
 		}
 	}
-	return todoList
 }
